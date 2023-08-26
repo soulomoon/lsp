@@ -70,8 +70,10 @@ library
     , prettyprinter
     , random
     , row-types
+    , singletons
     , sorted-list           ^>=0.2.1
     , stm                   ^>=2.5
+    , some
     , temporary
     , text
     , text-rope
@@ -79,6 +81,122 @@ library
     , unliftio-core         >=0.2.0.0
     , unordered-containers
     , uuid                  >=1.3
+
+common jsonrpc-typed-common
+  default-language:   Haskell2010
+  -- Various things we want on by default
+  -- * syntactic niceties, QOL
+  -- * we always want more deriving options
+  -- * we want all data strict by default
+  -- * we have lots of duplicte record fields
+  -- * extended type class stuff particularly for the
+  --   lens classes
+  -- * fancy types for singletons etc.
+  default-extensions:
+    BangPatterns
+    DataKinds
+    DeriveAnyClass
+    DeriveGeneric
+    DerivingStrategies
+    DerivingVia
+    DuplicateRecordFields
+    FlexibleInstances
+    FunctionalDependencies
+    FlexibleContexts
+    GADTs
+    GeneralizedNewtypeDeriving
+    ImportQualifiedPost
+    KindSignatures
+    LambdaCase
+    MultiParamTypeClasses
+    NegativeLiterals
+    OverloadedStrings
+    PolyKinds
+    ScopedTypeVariables
+    StandaloneDeriving
+    StandaloneKindSignatures
+    StrictData
+    TypeApplications
+    TypeFamilies
+    TypeOperators
+    UndecidableInstances
+  ghc-options:        -Wall -Wno-unticked-promoted-constructors
+
+library jsonrpc-typed
+  import: jsonrpc-typed-common
+  hs-source-dirs:     jsonrpc-typed
+
+  exposed-modules:
+    JSONRPC.Server.Control
+    JSONRPC.Server.Core
+    JSONRPC.Server.Processing
+    JSONRPC.IO
+    JSONRPC.Session
+    JSONRPC.RPC
+    JSONRPC.Types.Message
+    JSONRPC.Types.Id
+    JSONRPC.Types.Method
+
+  build-depends:
+    , aeson                 >=1.0.0.0
+    , attoparsec
+    , async
+    , base                  >=4.11    && <5
+    , bytestring
+    , co-log-core           >=0.3.1.0
+    , containers
+    , dependent-map
+    , dependent-sum
+    , data-default
+    , exceptions
+    , hashable
+    , lens-aeson
+    , lens                  >=4.15.2
+    , lsp-types             ^>=2.0.1
+    , mtl                   <2.4
+    , prettyprinter
+    , singletons
+    , stm                   ^>=2.5
+    , some
+    , text
+    , transformers          >=0.5.6   && <0.7
+    , unliftio-core         >=0.2.0.0
+
+test-suite jsonrpc-typed-test
+  import:             jsonrpc-typed-common
+  type:               exitcode-stdio-1.0
+  hs-source-dirs:     jsonrpc-typed-test
+  main-is:            Driver.hs
+  other-modules:
+    Json
+    Server
+    TestLib
+
+  build-depends:
+    , base
+    , async
+    , bytestring
+    , dependent-sum-template
+    , co-log-core
+    , aeson
+    , jsonrpc-typed
+    , containers
+    , lens
+    , concurrent-output
+    , singletons
+    , singletons-th
+    , some
+    , stm
+    , prettyprinter
+    , QuickCheck
+    , tasty
+    , tasty-golden
+    , tasty-quickcheck
+    , tasty-hunit
+    , text
+
+  build-tool-depends: tasty-discover:tasty-discover
+  ghc-options:        -threaded -rtsopts -with-rtsopts=-N
 
 executable lsp-demo-reactor-server
   main-is:          Reactor.hs
