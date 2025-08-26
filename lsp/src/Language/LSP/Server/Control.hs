@@ -13,7 +13,7 @@ import Colog.Core (LogAction (..), Severity (..), WithSeverity (..), (<&))
 import Colog.Core qualified as L
 import Control.Applicative ((<|>))
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (cancel, race, wait, withAsync)
+import Control.Concurrent.Async (race, wait, withAsync)
 import Control.Concurrent.STM.TChan
 import Control.Exception (catchJust, throwIO)
 import Control.Monad.IO.Class
