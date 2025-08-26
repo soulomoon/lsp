@@ -59,7 +59,6 @@ import Language.LSP.Protocol.Utils.SMethodMap qualified as SMethodMap
 import Language.LSP.Server.Core
 import Language.LSP.VFS as VFS
 import Prettyprinter
-import System.Exit
 
 data LspProcessingLog
   = VfsLog VfsLog
