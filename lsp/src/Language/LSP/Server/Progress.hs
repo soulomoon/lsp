@@ -17,15 +17,16 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.IO.Unlift
 import Data.Aeson qualified as J
+import Data.Foldable
 import Data.Map.Strict qualified as Map
 import Data.Maybe
 import Data.Text (Text)
-import Data.Text qualified as T
 import Language.LSP.Protocol.Lens qualified as L
 import Language.LSP.Protocol.Message
 import Language.LSP.Protocol.Types
 import Language.LSP.Protocol.Types qualified as L
 import Language.LSP.Server.Core
+import UnliftIO qualified as U
 import UnliftIO.Exception qualified as UE
 
 {- | A package indicating the percentage of progress complete and a
@@ -52,16 +53,16 @@ instance E.Exception ProgressCancelledException
 data ProgressCancellable = Cancellable | NotCancellable
 
 -- Get a new id for the progress session and make a new one
-getNewProgressId :: (MonadLsp config m) => Text -> m ProgressToken
-getNewProgressId title = do
+getNewProgressId :: MonadLsp config m => m ProgressToken
+getNewProgressId = do
   stateState (progressNextId . resProgressData) $ \cur ->
     let !next = cur + 1
-     in (L.ProgressToken $ L.InR (title <> T.pack (show cur)), next)
+     in (L.ProgressToken $ L.InL cur, next)
 {-# INLINE getNewProgressId #-}
 
 withProgressBase ::
   forall c m a.
-  (MonadLsp c m) =>
+  MonadLsp c m =>
   Bool ->
   Text ->
   Maybe ProgressToken ->
@@ -101,10 +102,12 @@ withProgressBase indefinite title clientToken cancellable f = do
 
     -- Deregister our 'ProgressToken', specifically its cancellation handler. It is important
     -- to do this reliably or else we will leak handlers.
-    unregisterToken :: ProgressToken -> m ()
-    unregisterToken token = do
+    unregisterToken :: m ()
+    unregisterToken = do
       handlers <- getProgressCancellationHandlers
-      liftIO $ atomically $ modifyTVar handlers (Map.delete token)
+      liftIO $ atomically $ do
+        mt <- tryReadTMVar tokenVar
+        for_ mt $ \t -> modifyTVar handlers (Map.delete t)
 
     -- Find and register our 'ProgressToken', asking the client for it if necessary.
     -- Note that this computation may terminate before we get the token, we need to wait
@@ -117,14 +120,14 @@ withProgressBase indefinite title clientToken cancellable f = do
       -- the title/initial percentage aren't given until the 'begin' mesage. However,
       -- it's neater not to create tokens that we won't use, and clients may find it
       -- easier to clean them up if they receive begin/end reports for them.
-      when (startDelay > 0) $ liftIO $ threadDelay startDelay
+      liftIO $ threadDelay startDelay
       case clientToken of
         -- See Note [Client- versus server-initiated progress]
         -- Client-initiated progress
         Just t -> registerToken t
         -- Try server-initiated progress
         Nothing -> do
-          t <- getNewProgressId title
+          t <- getNewProgressId
           clientCaps <- getClientCapabilities
 
           -- If we don't have a progress token from the client and
@@ -142,54 +145,43 @@ withProgressBase indefinite title clientToken cancellable f = do
               -- Successfully registered the token, we can now use it.
               -- So we go ahead and start. We do this as soon as we get the
               -- token back so the client gets feedback ASAP
-              Right _ -> do
-                registerToken t
+              Right _ -> registerToken t
               -- The client sent us an error, we can't use the token.
-              Left _err -> do
-                pure ()
+              Left _err -> pure ()
 
-    update t = do
-      forever $ do
-        -- See Note [Delayed progress reporting]
-        when (updateDelay > 0) $ liftIO $ threadDelay updateDelay
+    -- Actually send the progress reports.
+    sendReports :: m ()
+    sendReports = do
+      t <- liftIO $ atomically $ readTMVar tokenVar
+      begin t
+      -- Once we are sending updates, if we get interrupted we should send
+      -- the end notification
+      update t `UE.finally` end t
+     where
+      cancellable' = case cancellable of
+        Cancellable -> Just True
+        NotCancellable -> Just False
+      begin t = do
         (ProgressAmount pct msg) <- liftIO $ atomically $ takeTMVar reportVar
-        sendProgressReport t $ WorkDoneProgressReport L.AString Nothing msg pct
-    end t = sendProgressReport t (WorkDoneProgressEnd L.AString Nothing)
-
-    begin t = do
-      sendProgressReport t $ WorkDoneProgressBegin L.AString title cancellable' Nothing Nothing
-      return t
-
-    cancellable' = case cancellable of
-      Cancellable -> Just True
-      NotCancellable -> Just False
-
-    -- if we have no delays then we can use uninterruptibleMask_ to create the token
-    -- to ensure we always get begin and end messages
-    maskTokenCreation =
-      if startDelay == 0 && updateDelay == 0
-        then UE.uninterruptibleMask_
-        else id
+        sendProgressReport t $ WorkDoneProgressBegin L.AString title cancellable' msg pct
+      update t =
+        forever $ do
+          -- See Note [Delayed progress reporting]
+          liftIO $ threadDelay updateDelay
+          (ProgressAmount pct msg) <- liftIO $ atomically $ takeTMVar reportVar
+          sendProgressReport t $ WorkDoneProgressReport L.AString Nothing msg pct
+      end t = sendProgressReport t (WorkDoneProgressEnd L.AString Nothing)
 
     -- Create the token and then start sending reports; all of which races with the check for the
     -- progress having ended. In all cases, make sure to unregister the token at the end.
-    progressThreads runInBase =
-      runInBase
-        ( UE.bracket
-            ( maskTokenCreation $
-                createToken
-                  >> liftIO (atomically $ readTMVar tokenVar)
-                  >>= begin
-            )
-            ( \t -> end t >> unregisterToken t
-            )
-            update
-        )
-        `race_` progressEnded
+    progressThreads :: m ()
+    progressThreads =
+      ((createToken >> sendReports) `UE.finally` unregisterToken) `U.race_` liftIO progressEnded
+
   withRunInIO $ \runInBase -> do
     withAsync (runInBase $ f updater) $ \mainAct ->
       -- If the progress gets cancelled then we need to get cancelled too
-      withAsync (progressThreads runInBase) $ \pthreads -> do
+      withAsync (runInBase progressThreads) $ \pthreads -> do
         r <- waitEither mainAct pthreads
         -- TODO: is this weird? I can't see how else to gracefully use the ending barrier
         -- as a guard to cancel the other async
