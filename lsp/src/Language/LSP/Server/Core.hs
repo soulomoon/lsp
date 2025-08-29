@@ -137,6 +137,7 @@ data LanguageContextEnv config = LanguageContextEnv
   -- ^ The delay before starting a progress reporting session, in microseconds
   , resProgressUpdateDelay :: Int
   -- ^ The delay between sending progress updates, in microseconds
+  , resWaitSender :: !(IO ())
   }
 
 -- ---------------------------------------------------------------------

@@ -12,8 +12,7 @@ module Language.LSP.Server.Control (
 import Colog.Core (LogAction (..), Severity (..), WithSeverity (..), (<&))
 import Colog.Core qualified as L
 import Control.Applicative ((<|>))
-import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (race, wait, withAsync)
+import Control.Concurrent.Async (wait, withAsync)
 import Control.Concurrent.STM.TChan
 import Control.Exception (catchJust, throwIO)
 import Control.Monad.IO.Class
@@ -45,7 +44,6 @@ data LspServerLog
   | BrokenPipeWhileSending TL.Text -- truncated outgoing message (including header)
   | Starting
   | ServerStopped
-  | SenderShutdownTimeout -- client sender did not stop in time
   | ParsedMsg T.Text
   | SendMsg TL.Text
   deriving (Show)
@@ -72,7 +70,6 @@ instance Pretty LspServerLog where
   pretty Starting = "Server starting"
   pretty (ParsedMsg msg) = "---> " <> pretty msg
   pretty (SendMsg msg) = "<--2-- " <> pretty msg
-  pretty SenderShutdownTimeout = "Sender did not stop within 3s; cancelling"
 
 -- ---------------------------------------------------------------------
 
@@ -152,13 +149,7 @@ runServerWith ioLogger logger clientIn clientOut serverDefinition = do
   cout <- atomically newTChan :: IO (TChan FromServerMessage)
   withAsync (sendServer ioLogger cout clientOut) $ \_sendAsync -> do
     let sendMsg = atomically . writeTChan cout
-    res <- ioLoop ioLogger logger clientIn serverDefinition emptyVFS sendMsg
-    -- The sender should stop after we send the shutdown response.
-    -- Wait up to 3 seconds for the sender to finish; cancel if it doesn't.
-    r <- race (wait _sendAsync) (threadDelay 3_000_000)
-    case r of
-      Left _ -> pure ()
-      Right _ -> ioLogger <& SenderShutdownTimeout `WithSeverity` Warning
+    res <- ioLoop ioLogger logger clientIn serverDefinition emptyVFS sendMsg (wait _sendAsync)
     ioLogger <& ServerStopped `WithSeverity` Info
     return res
 
@@ -172,8 +163,9 @@ ioLoop ::
   ServerDefinition config ->
   VFS ->
   (FromServerMessage -> IO ()) ->
+  IO () ->
   IO Int
-ioLoop ioLogger logger clientIn serverDefinition vfs sendMsg = do
+ioLoop ioLogger logger clientIn serverDefinition vfs sendMsg waitSenderFinish = do
   minitialize <- parseOne ioLogger clientIn (parse parser "")
   case minitialize of
     Nothing -> pure 1
@@ -183,7 +175,7 @@ ioLoop ioLogger logger clientIn serverDefinition vfs sendMsg = do
           ioLogger <& DecodeInitializeError err `WithSeverity` Error
           return 1
         Right initialize -> do
-          mInitResp <- Processing.initializeRequestHandler pioLogger serverDefinition vfs sendMsg initialize
+          mInitResp <- Processing.initializeRequestHandler pioLogger serverDefinition vfs sendMsg waitSenderFinish initialize
           case mInitResp of
             Nothing -> pure 1
             Just env -> runLspT env $ loop (parse parser remainder)

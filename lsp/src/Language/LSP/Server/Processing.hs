@@ -59,6 +59,7 @@ import Language.LSP.Protocol.Utils.SMethodMap qualified as SMethodMap
 import Language.LSP.Server.Core
 import Language.LSP.VFS as VFS
 import Prettyprinter
+import UnliftIO (race)
 
 data LspProcessingLog
   = VfsLog VfsLog
@@ -68,6 +69,7 @@ data LspProcessingLog
   | ProgressCancel ProgressToken
   | forall m. MessageDuringShutdown (SClientMethod m)
   | ShuttingDown
+  | ShuttingDownSenderTimeout !Int
   | Exiting
 
 deriving instance Show LspProcessingLog
@@ -75,6 +77,11 @@ deriving instance Show LspProcessingLog
 instance Pretty LspProcessingLog where
   pretty (VfsLog l) = pretty l
   pretty (LspCore l) = pretty l
+  pretty (ShuttingDownSenderTimeout sec) =
+    vsep
+      [ "LSP: sender did not shut down within" <+> pretty sec <+> "seconds"
+      , "This likely indicates a broken pipe, and the server should exit now"
+      ]
   pretty (MessageProcessingError bs err) =
     vsep
       [ "LSP: incoming message parse error:"
@@ -118,9 +125,10 @@ initializeRequestHandler ::
   ServerDefinition config ->
   VFS ->
   (FromServerMessage -> IO ()) ->
+  IO () ->
   TMessage Method_Initialize ->
   IO (Maybe (LanguageContextEnv config))
-initializeRequestHandler logger ServerDefinition{..} vfs sendFunc req = do
+initializeRequestHandler logger ServerDefinition{..} vfs sendFunc waitSender req = do
   let sendResp = sendFunc . FromServerRsp SMethod_Initialize
       handleErr (Left err) = do
         sendResp $ makeResponseError (req ^. L.id) err
@@ -187,6 +195,7 @@ initializeRequestHandler logger ServerDefinition{..} vfs sendFunc req = do
             rootDir
             (optProgressStartDelay options)
             (optProgressUpdateDelay options)
+            waitSender
         configChanger config = forward interpreter (onConfigChange config)
         handlers = transmuteHandlers interpreter (staticHandlers clientCaps)
         interpreter = interpretHandler initializationResult
@@ -504,6 +513,17 @@ handle' logger mAction m msg = do
     -- See Note [Shutdown]
     IsClientReq | shutdown, not (allowedMethod m) -> requestDuringShutdown msg
     IsClientReq -> case pickHandler dynReqHandlers reqHandlers of
+      Just h | SMethod_Shutdown <- m -> do
+        waitSender <- resWaitSender <$> getLspEnv
+        liftIO $ h msg (runLspT env . sendResponse msg)
+        -- wait for the sender to finish before we return
+        -- todo magic number
+        let waitTime = 3 -- seconds
+        r <- liftIO $ race waitSender (threadDelay $ waitTime * 1_000_000)
+        case r of
+          Left _ -> pure ()
+          Right _ -> logger <& ShuttingDownSenderTimeout waitTime `WithSeverity` Warning
+        liftIO waitSender
       Just h -> liftIO $ h msg (runLspT env . sendResponse msg)
       Nothing
         | SMethod_Shutdown <- m -> liftIO $ shutdownRequestHandler msg (runLspT env . sendResponse msg)
