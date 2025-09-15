@@ -196,6 +196,7 @@ initializeRequestHandler logger ServerDefinition{..} vfs sendFunc waitSender req
             (optProgressStartDelay options)
             (optProgressUpdateDelay options)
             waitSender
+            (optProgressWaitForToken options)
         configChanger config = forward interpreter (onConfigChange config)
         handlers = transmuteHandlers interpreter (staticHandlers clientCaps)
         interpreter = interpretHandler initializationResult

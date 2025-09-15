@@ -71,7 +71,7 @@ withProgressBase ::
   m a
 withProgressBase indefinite title clientToken cancellable f = do
   let initialProgress = ProgressAmount (if indefinite then Nothing else Just 0) Nothing
-  LanguageContextEnv{resProgressStartDelay = startDelay, resProgressUpdateDelay = updateDelay} <- getLspEnv
+  LanguageContextEnv{resProgressStartDelay = startDelay, resProgressUpdateDelay = updateDelay, resProgressWaitForToken = waitForToken} <- getLspEnv
 
   tokenVar <- liftIO newEmptyTMVarIO
   reportVar <- liftIO $ newTMVarIO initialProgress
@@ -134,11 +134,12 @@ withProgressBase indefinite title clientToken cancellable f = do
           -- the client doesn't support server-initiated progress then
           -- there's nothing to do: we can't report progress.
           when (clientSupportsServerInitiatedProgress clientCaps)
-            $ void
-            $
+            $ sendCreate waitForToken t
             -- Server-initiated progress
             -- See Note [Client- versus server-initiated progress]
-            sendRequest
+
+    sendCreate True t =
+            void $ sendRequest
               SMethod_WindowWorkDoneProgressCreate
               (WorkDoneProgressCreateParams t)
             $ \case
@@ -148,6 +149,14 @@ withProgressBase indefinite title clientToken cancellable f = do
               Right _ -> registerToken t
               -- The client sent us an error, we can't use the token.
               Left _err -> pure ()
+
+    -- do not wait for the response just for the sake of testing
+    sendCreate False t = do
+            void $ sendRequest
+              SMethod_WindowWorkDoneProgressCreate
+              (WorkDoneProgressCreateParams t)
+              $ const (pure ())
+            registerToken t
 
     -- Actually send the progress reports.
     sendReports :: m ()

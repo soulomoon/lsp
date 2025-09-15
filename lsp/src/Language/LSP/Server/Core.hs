@@ -138,6 +138,7 @@ data LanguageContextEnv config = LanguageContextEnv
   , resProgressUpdateDelay :: Int
   -- ^ The delay between sending progress updates, in microseconds
   , resWaitSender :: !(IO ())
+  , resProgressWaitForToken :: Bool
   }
 
 -- ---------------------------------------------------------------------
@@ -296,6 +297,8 @@ data Options = Options
   -- ^ The delay before starting a progress reporting session, in microseconds
   , optProgressUpdateDelay :: Int
   -- ^ The delay between sending progress updates, in microseconds
+  , optProgressWaitForToken :: Bool
+  -- ^ Whether or not to wait for the client to acknowledge the progress token creation
   }
 
 instance Default Options where
@@ -314,6 +317,7 @@ instance Default Options where
       -- See Note [Delayed progress reporting]
       0
       0
+      True
 
 defaultOptions :: Options
 defaultOptions = def
