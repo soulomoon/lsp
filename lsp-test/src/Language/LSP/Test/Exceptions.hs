@@ -18,7 +18,7 @@ data SessionException
   | UnexpectedDiagnostics
   | IncorrectApplyEditRequest String
   | forall m. Show (ErrorData m) => UnexpectedResponseError (LspId m) (TResponseError m)
-  | UnexpectedServerTermination
+  | UnexpectedServerTermination IOError
   | IllegalInitSequenceMessage FromServerMessage
   | MessageSendError Value IOError
 
@@ -65,7 +65,7 @@ instance Show SessionException where
       ++ show lid
       ++ ":\n"
       ++ show e
-  show UnexpectedServerTermination = "Language server unexpectedly terminated"
+  show (UnexpectedServerTermination e) = "Language server unexpectedly terminated: " <> show e
   show (IllegalInitSequenceMessage msg) =
     "Received an illegal message between the initialize request and response:\n"
       ++ B.unpack (encodePretty msg)

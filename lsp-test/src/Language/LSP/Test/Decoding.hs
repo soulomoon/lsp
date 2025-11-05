@@ -49,7 +49,7 @@ getHeaders h = do
   if null val then return [] else ((name, drop 2 val) :) <$> getHeaders h
  where
   eofHandler e
-    | isEOFError e = throw UnexpectedServerTermination
+    | isEOFError e = throw $ UnexpectedServerTermination e
     | otherwise = throw e
 
 type RequestMap = IxMap LspId (SMethod :: Method ClientToServer Request -> Type)
